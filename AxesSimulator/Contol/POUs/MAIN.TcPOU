@@ -1,0 +1,281 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.4">
+  <POU Name="MAIN" Id="{66959d8b-103b-4309-9846-4d9c01568e87}" SpecialFunc="None">
+    <Declaration><![CDATA[PROGRAM MAIN
+VAR
+	boReadShow						: BOOL;		// GUI
+	boShowActive					: BOOL;
+	fbTimeout						: TON;
+	
+	(* Show Functions & Parameters *)
+	// 1. csv file loading
+	fbCsvRead						: FB_CsvRead_CamTable;
+	iFrames							: INT;
+	boShowLoadError					: BOOL;
+	boShowLoaded					: BOOL;
+	i								: INT;
+	
+	// 2. show manupulation
+	iShowState						: INT := 0;
+	boStartShow						: BOOL;		// GUI
+	
+	// camming table
+	TableCamRef						: ARRAY[0..iMotorsNum-1] OF MC_CAM_REF;
+	MC_CamTableSelect				: MC_CamTableSelect;
+	MC_ReadCamTableCharacteristics	: ARRAY[0..iMotorsNum-1] OF MC_ReadCamTableCharacteristics;
+	MC_TableCharacValues			: ARRAY[0..iMotorsNum-1] OF MC_TableCharacValues;
+	
+	// 1. Master Axis
+	AXMaster						: AXIS_REF;
+	fbMasterEnable					: MC_Power;
+	fbMasterSetPosition				: MC_SetPosition;
+	fbMasterMoveAbs					: MC_MoveAbsolute;
+	fbMasterReset					: MC_Reset;
+	
+	boMasterEnable					: BOOL;
+	boMasterSetPosition				: BOOL;
+	boMasterMovAbs					: BOOL;
+	rMasterTargetPosition			: REAL;
+	boMasterReset					: BOOL;
+	
+	// 2. Pendulum Axis
+	AxMotor							: ARRAY[0..iMotorsNum-1] OF AXIS_REF;
+	fbEnable						: ARRAY[0..iMotorsNum-1] OF MC_Power;
+	ST_CamInOptions					: ST_CamInOptions;	// Data Type deceleration — MC_CamIn input
+	fbCamIn							: ARRAY[0..iMotorsNum-1] OF MC_CamIn;
+	fbCamOut						: ARRAY[0..iMotorsNum-1] OF MC_CamOut;
+	fbReset							: ARRAY[0..iMotorsNum-1] OF MC_Reset;
+	
+	boEnable						: BOOL;
+	boAxCamIn						: BOOL	:= FALSE;
+	boAxCamOut						: BOOL	:= FALSE;
+	boReset							: BOOL;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[// General
+boShowLoaded										:= aa2lrTable[0][iMaxPoints-1,0] <> 0 AND NOT fbCsvRead.OUT_boBusy;
+boShowActive										:= iShowState > 0;
+fbTimeout();
+
+// Logic Control
+IF NOT boShowActive THEN
+	fbCsvRead(
+		IN_smaxDirectoryName						:= sFileDir, 
+		IN_sFileName								:= sFileName, 
+		IN_sColumnSeparator							:= ',', 
+		IN_iMotorsNr								:= 1, 
+		IN_boStartReading							:= boReadShow, 
+		IN_paa2lrTable								:= ADR(aa2lrTable), 
+		OUT_boError									=> boShowLoadError);
+	IF fbCsvRead.OUT_boDone AND NOT fbCsvRead.OUT_boError THEN
+		iFrames										:= fbCsvRead.OUT_iRowsnNumber;
+		boReadShow									:= FALSE;
+	ELSIF fbCsvRead.OUT_boDone AND fbCsvRead.OUT_boError THEN
+		boReadShow									:= FALSE;
+	END_IF
+ELSE
+	CASE iShowState OF
+		0:		// Idle
+			IF boStartShow AND boShowLoaded THEN
+				boStartShow							:= FALSE;
+				iShowState							:= 10;
+			END_IF
+			
+		10:		// preparing camming referencing
+			rMasterTargetPosition					:= aa2lrTable[0][iMaxPoints-1,0];	// last time stamp in the table
+			FOR i := 0 TO iMotorsNum - 1 DO
+				TableCamRef[i].pArray				:= ADR(aa2lrTable[i]);
+				TableCamRef[i].ArraySize			:= SIZEOF(aa2lrTable[i]);
+				TableCamRef[i].TableType			:= MC_TABLETYPE_NONEQUIDISTANT;
+				TableCamRef[i].NoOfRows				:= INT_TO_UDINT(iMaxPoints);
+				TableCamRef[i].NoOfColumns			:= 2;
+			END_FOR
+			i 										:= 0;
+			iShowState								:= 20;
+			
+		20:		// select camming table
+			MC_CamTableSelect(
+				Master								:= AxMaster, 
+				Slave								:= AxMotor[i], 
+				CamTable							:= TableCamRef[i], 
+				Execute								:= TRUE, 
+				Periodic							:= FALSE, 
+				MasterAbsolute						:= TRUE, 
+				SlaveAbsolute						:= TRUE, 
+				CamTableID							:= 1, 
+				Done=> , 
+				Busy=> , 
+				Error=> , 
+				ErrorID=> );
+			IF MC_CamTableSelect.Done AND NOT MC_CamTableSelect.Error THEN
+				MC_CamTableSelect(	
+					Master							:= AxMaster, 
+					Slave							:= AxMotor[i], 
+					CamTable						:= TableCamRef[i],
+					Execute							:= FALSE);
+				IF i = iMotorsNum-1 THEN
+					iShowState						:= 30;
+				ELSE
+					i								:= i + 1;
+				END_IF
+			ELSIF MC_CamTableSelect.Error THEN
+				MC_CamTableSelect(	
+					Master							:= AxMaster, 
+					Slave							:= AxMotor[i], 
+					CamTable						:= TableCamRef[i],
+					Execute							:= FALSE);
+			END_IF
+			
+		30:		// kinetic initialization
+			boMasterEnable							:= TRUE;
+			boEnable								:= TRUE;
+			
+	END_CASE
+END_IF
+
+(* Cyclic Calls *)
+// 1. Master Axis
+fbMasterEnable(
+	Axis											:= AxMaster, 
+	Enable											:= boMasterEnable, 
+	Enable_Positive									:= TRUE, 
+	Enable_Negative									:= TRUE, 
+	Override										:= 100, 
+	BufferMode										:= MC_Aborting, 
+	Options:= , 
+	Status=> , 
+	Busy=> , 
+	Active=> , 
+	Error=> , 
+	ErrorID=> );
+
+fbMasterSetPosition(
+	Axis											:= AxMaster, 
+	Execute											:= boMasterSetPosition, 
+	Position										:= 0, 
+	Mode:= , 
+	Options:= , 
+	Done=> , 
+	Busy=> , 
+	Error=> , 
+	ErrorID=> );
+
+fbMasterMoveAbs(
+	Axis											:= AxMaster, 
+	Execute											:= boMasterMovAbs, 
+	Position										:= rMasterTargetPosition, 
+	Velocity										:= rShowVelocity, 
+	Acceleration									:= rShowAcceleration, 
+	Deceleration									:= rShowDeceleration, 
+	Jerk:= , 
+	BufferMode:= , 
+	Options:= , 
+	Done=> , 
+	Busy=> , 
+	Active=> , 
+	CommandAborted=> , 
+	Error=> , 
+	ErrorID=> );
+
+fbMasterReset(
+	Axis											:= AxMaster, 
+	Execute											:= boMasterReset, 
+	Done=> , 
+	Busy=> , 
+	Error=> , 
+	ErrorID=> );
+
+// 2. Pendulum Axis
+FOR i := 0 TO iMotorsNum-1 DO
+	fbEnable[i](
+		Axis										:= AxMotor[i], 
+		Enable										:= boEnable, 
+		Enable_Positive								:= TRUE, 
+		Enable_Negative								:= TRUE, 
+		Override:= , 
+		BufferMode:= , 
+		Options:= , 
+		Status=> , 
+		Busy=> , 
+		Active=> , 
+		Error=> , 
+		ErrorID=> );
+	
+	fbCamIn[i](
+		Master										:= AxMaster, 
+		Slave										:= AxMotor[i], 
+		Execute										:= boAxCamIn, 
+		MasterOffset								:= 0, 
+		SlaveOffset									:= 0, 
+		MasterScaling								:= 1, 
+		SlaveScaling								:= 1, 
+		StartMode:= , 
+		CamTableID									:= 1, 
+		BufferMode:= , 
+		Options										:= ST_CamInOptions, 
+		//InterpolationType							:= MC_InterpolationType_Spline, 
+		InSync=> , 
+		Busy=> , 
+		Active=> , 
+		CommandAborted=> , 
+		Error=> , 
+		ErrorID=> );
+	
+	fbCamOut[i](
+		Slave										:= AxMotor[i], 
+		Execute										:= boAxCamOut, 
+		Options:= , 
+		Done=> , 
+		Busy=> , 
+		Error=> , 
+		ErrorID=> );
+	
+	fbReset[i](
+		Axis										:= AxMotor[i], 
+		Execute										:= boReset, 
+		Done=> , 
+		Busy=> , 
+		Error=> , 
+		ErrorID=> );
+END_FOR
+]]></ST>
+    </Implementation>
+    <LineIds Name="MAIN">
+      <LineId Id="103" Count="0" />
+      <LineId Id="145" Count="0" />
+      <LineId Id="104" Count="0" />
+      <LineId Id="458" Count="0" />
+      <LineId Id="144" Count="0" />
+      <LineId Id="105" Count="9" />
+      <LineId Id="117" Count="1" />
+      <LineId Id="131" Count="10" />
+      <LineId Id="146" Count="1" />
+      <LineId Id="149" Count="0" />
+      <LineId Id="167" Count="0" />
+      <LineId Id="170" Count="3" />
+      <LineId Id="168" Count="1" />
+      <LineId Id="239" Count="0" />
+      <LineId Id="148" Count="0" />
+      <LineId Id="176" Count="0" />
+      <LineId Id="174" Count="0" />
+      <LineId Id="205" Count="0" />
+      <LineId Id="209" Count="18" />
+      <LineId Id="240" Count="0" />
+      <LineId Id="242" Count="1" />
+      <LineId Id="241" Count="0" />
+      <LineId Id="228" Count="5" />
+      <LineId Id="206" Count="0" />
+      <LineId Id="244" Count="1" />
+      <LineId Id="451" Count="1" />
+      <LineId Id="456" Count="0" />
+      <LineId Id="143" Count="0" />
+      <LineId Id="15" Count="0" />
+      <LineId Id="247" Count="53" />
+      <LineId Id="399" Count="0" />
+      <LineId Id="402" Count="48" />
+      <LineId Id="400" Count="1" />
+      <LineId Id="246" Count="0" />
+    </LineIds>
+  </POU>
+</TcPlcObject>

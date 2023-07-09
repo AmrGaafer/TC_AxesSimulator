@@ -1,0 +1,157 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.4">
+  <POU Name="FB_CsvRead_CamTable" Id="{8c8c7f24-00a8-4cc4-9b3f-ee511cad2f38}" SpecialFunc="None">
+    <Declaration><![CDATA[FUNCTION_BLOCK FB_CsvRead_CamTable
+VAR_INPUT
+	IN_smaxDirectoryName				: T_MaxString;
+	IN_sFileName						: STRING;
+	IN_sColumnSeparator					: STRING;
+	IN_iMotorsNr						: INT;
+	IN_boStartReading					: BOOL;
+	IN_paa2lrTable						: POINTER TO ARRAY[0..iMotorsNum-1] OF ARRAY[0..iMaxPoints-1,0..1] OF LREAL;
+END_VAR
+VAR_OUTPUT
+	OUT_boBusy							: BOOL;		// Reading active
+	OUT_boDone							: BOOL;		// Reading Done user-defined flag
+	OUT_boError							: BOOL;
+	OUT_iReadingError					: INT;		// Reading error user-defined flag; 0:Clear, 1:Opening, 2:Getting
+	OUT_iRowsnNumber					: INT;		// Number of actual read rows
+	//OUT_arTableColumn					: ARRAY[0..iMotorsNum] OF ARRAY[0..iMaxPoints-1] OF REAL;
+END_VAR
+
+VAR
+	ReadCSV								: R_TRIG;
+	iStep								: INT;						// identifier of the execution sequence — State index
+	
+	fbFileOpen							: FB_FileOpen;				// Opens file
+	fbFileGets							: FB_FileGets;				// Reads text data from the opened file
+	fbReader							: FB_CSVMemBufferReader;	// Helper function block used to parse CSV data bytes
+	fbFileClose							: FB_FileClose;				// Closes file
+	
+	sPathName							: T_MaxString;
+	nMode								: DWORD := FOPEN_MODEREAD OR FOPEN_MODEBINARY;	(* FileOpen input *)
+	bBusy								: BOOL;											(* Internal Busy flag *)
+	nErrId								: UDINT;										(* Block output *)
+	hFile								: UINT	:= 0;									(* File handle of the source file *)
+	
+	iRow								: INT;											// Row number (record)
+	iColumn								: INT;											// Column number (record field)
+	
+	lrDummy								: LREAL;
+END_VAR]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[ReadCSV(CLK								:= IN_boStartReading);	// Latching the start reading command
+OUT_boBusy								:= iStep <> 0;			// Busy as long as state machine running
+
+// Column Separator selection
+IF IN_sColumnSeparator = ',' THEN
+	DEFAULT_CSV_FIELD_SEP				:= 16#2C;				// American Separator (,) 16#2C
+ELSIF IN_sColumnSeparator = ';' THEN
+	DEFAULT_CSV_FIELD_SEP				:= 16#3B;				// European Separator (;) 16#3B
+END_IF
+
+CASE iStep OF 
+	0:		// Sleep Mode — wait till the starting signal is triggered
+		sPathName						:= CONCAT(IN_smaxDirectoryName, IN_sFileName);
+		fbFileOpen(bExecute				:= FALSE);
+		fbFileGets(bExecute				:= FALSE);
+		IF ReadCSV.Q THEN	// Reset parameters — Transition to the next step
+			OUT_boDone			:= FALSE;
+			OUT_iReadingError			:= 0;
+			MEMSET(IN_paa2lrTable, 0, SIZEOF(IN_paa2lrTable^));
+			bBusy						:= TRUE;
+			OUT_boError					:= FALSE;
+			nErrId						:= 0;
+			hFile						:= 0;
+			iRow						:= 0;
+			iStep						:= 10;
+		END_IF
+	
+	10:		// File Opening Command
+		fbFileOpen(	
+			sPathName					:= sPathName, 
+			nMode						:= nMode, 
+			bExecute					:= TRUE, 
+			bError						=> OUT_boError, 
+			nErrID 						=> nErrID, 
+			hFile						=> hFile );
+		IF NOT fbFileOpen.bBusy THEN
+			IF NOT fbFileOpen.bError THEN
+				fbFileOpen(bExecute		:= FALSE);
+				iStep					:= 20;      // File opened & without error
+			ELSE
+				fbFileOpen(bExecute		:= FALSE);
+				iStep					:= 100;    // Error — File not found!
+				OUT_iReadingError		:= 1;
+			END_IF
+		END_IF
+		
+	20:		// Data Getting Command
+		fbFileGets(	
+			hFile						:= hFile, 
+			bExecute					:= TRUE, 
+			bError						=> OUT_boError);
+		IF NOT fbFileGets.bBusy THEN
+			IF NOT fbFileGets.bError THEN
+				IF fbFileGets.bEOF THEN
+					fbFileGets(bExecute	:= FALSE);
+					iStep				:= 40;		// .csv file end is reached — Close File
+				ELSE
+					fbFileGets(bExecute	:= FALSE);
+					iStep				:= 30;		// Parse text data
+				END_IF
+			ELSE
+				iStep					:= 100;		// Error — During the excution!
+				OUT_iReadingError		:= 2;
+			END_IF		
+		END_IF
+		
+	30:		// Parse text data
+		fbReader(	
+			eCmd						:= eEnumCmd_First, 
+			pBuffer						:= ADR(fbFileGets.sLine), 
+			cbBuffer					:= SIZEOF(fbFileGets.sLine));	// Read first field value — given from the manual
+		IF fbReader.bOk THEN
+			lrDummy						:= STRING_TO_LREAL(fbReader.getValue);
+			FOR iColumn := 0 TO IN_iMotorsNr-1 DO
+				fbReader(	
+					eCmd				:= eEnumCmd_Next, 
+					pBuffer				:= ADR(fbFileGets.sLine), 
+					cbBuffer			:= SIZEOF(fbFileGets.sLine));
+				IN_paa2lrTable^[iColumn][iRow,0]	:= lrDummy;								// Master Axis Positions
+				IN_paa2lrTable^[iColumn][iRow,1]	:= STRING_TO_REAL(fbReader.getValue);	// Motors Axes Positions
+			END_FOR
+			iRow						:= iRow +1;		// Increment number of read records
+			iStep						:= 20;			// Read new row
+		END_IF
+	
+	40:		// Close source file command
+		OUT_iRowsnNumber				:= iRow;
+		fbFileClose(	
+			hFile						:= hFile, 
+			bExecute					:= TRUE, 
+			bError						=> OUT_boError);
+		IF NOT fbFileClose.bBusy THEN
+			fbFileClose(bExecute		:= FALSE);
+			hFile						:= 0;
+			iStep						:= 100;
+		END_IF
+	
+	100:	// Error OR ready step => cleanup
+		IF ( hFile <> 0 ) THEN
+			iStep						:= 10;		// Close the source file and cleanup hFile
+		ELSE
+			bBusy						:= FALSE;	// Lowering the Busy flag
+			OUT_boDone			:= TRUE;	// Ending Service Routine flag
+			iStep						:= 0;		// Ready for a new run when triggered/called
+		END_IF
+END_CASE]]></ST>
+    </Implementation>
+    <LineIds Name="FB_CsvRead_CamTable">
+      <LineId Id="1624" Count="1" />
+      <LineId Id="1728" Count="0" />
+      <LineId Id="1626" Count="101" />
+      <LineId Id="9" Count="0" />
+    </LineIds>
+  </POU>
+</TcPlcObject>

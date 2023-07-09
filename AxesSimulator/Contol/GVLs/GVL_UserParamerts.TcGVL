@@ -1,0 +1,25 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.4">
+  <GVL Name="GVL_UserParamerts" Id="{35a882cb-0929-4dd5-b165-241f8f953556}">
+    <Declaration><![CDATA[//{attribute 'qualified_only'}
+VAR_GLOBAL CONSTANT
+	// kinetic parameters
+	
+	// show parameters
+	rShowVelocity					: REAL		:= 1;
+	rShowAcceleration				: REAL		:= 1000;
+	rShowDeceleration				: REAL		:= 1000;
+	
+	// csv file parameters
+	iMaxPoints						: INT		:= 5864;		// Maximum number of frames/rows/required positions 32.000 -> Activate Configuration
+	iMotorsNum						: INT		:= 5;			// Fixed
+	sFileDir						: STRING	:= 'C:\Users\Amr Awad\Desktop\TC_AxesSimulator\_ShowFiles_\';
+	sFileName						: STRING	:= 'gesamt_show.csv';
+END_VAR
+VAR_GLOBAL PERSISTENT
+	aa2lrTable						: ARRAY[0..iMotorsNum-1] OF ARRAY[0..iMaxPoints-1,0..1] OF LREAL;
+END_VAR
+
+]]></Declaration>
+  </GVL>
+</TcPlcObject>
