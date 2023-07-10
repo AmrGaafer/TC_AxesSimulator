@@ -4,6 +4,9 @@
     <Declaration><![CDATA[//{attribute 'qualified_only'}
 VAR_GLOBAL CONSTANT
 	// kinetic parameters
+	lrVelocity						: REAL		:= 100;
+	lrAcceleration					: REAL		:= 100;
+	lrDeceleration					: REAL		:= 100;
 	
 	// show parameters
 	rShowVelocity					: REAL		:= 1;

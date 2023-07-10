@@ -2315,7 +2315,7 @@ External Setpoint Generation:
 		</Motion>
 		<Plc>
 			<Project GUID="{2B7EB046-855C-4139-AA45-A67478BBE197}" Name="Contol" PrjFilePath="Contol\Contol.plcproj" TmcFilePath="Contol\Contol.tmc" ReloadTmc="true" AmsPort="851" FileArchiveSettings="#x000e" SymbolicMapping="true">
-				<Instance Id="#x08502000" TcSmClass="TComPlcObjDef" KeepUnrestoredLinks="2">
+				<Instance Id="#x08502000" TcSmClass="TComPlcObjDef" KeepUnrestoredLinks="2" TmcPath="Contol\Contol.tmc">
 					<Name>Contol Instance</Name>
 					<CLSID ClassFactory="TcPlc30">{08500001-0000-0000-F000-000000000064}</CLSID>
 					<Vars VarGrpType="1">
