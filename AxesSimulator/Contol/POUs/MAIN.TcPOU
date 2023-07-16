@@ -39,7 +39,7 @@ VAR
 	rMasterTargetPosition			: REAL;
 	boMasterReset					: BOOL;
 	
-	// 2. Pendulum Axis
+	// 2. Slave Axes
 	AxMotor							: ARRAY[0..iMotorsNum-1] OF AXIS_REF;
 	fbEnable						: ARRAY[0..iMotorsNum-1] OF MC_Power;
 	fbMoveAbs						: ARRAY[0..iMotorsNum-1] OF MC_MoveAbsolute;
@@ -54,7 +54,9 @@ VAR
 	boMoveAbsDone					: BOOL;
 	boMoveAbsError					: BOOL;
 	boAxCamIn						: BOOL	:= FALSE;
+	boAxCamInDone					: BOOL;
 	boAxCamOut						: BOOL	:= FALSE;
+	boAxCamOutDone					: BOOL;
 	boReset							: BOOL;
 	
 	
@@ -62,7 +64,7 @@ END_VAR
 ]]></Declaration>
     <Implementation>
       <ST><![CDATA[// General
-boShowLoaded										:= aa2lrTable[0][iMaxPoints-1,0] <> 0 AND NOT fbCsvRead.OUT_boBusy;
+boShowLoaded										:= aa2lrTable[iMotorsNum-1][iMaxPoints-1,0] <> 0 AND NOT fbCsvRead.OUT_boBusy;
 boShowActive										:= iShowState > 0;
 fbTimeout();
 
@@ -72,7 +74,7 @@ IF NOT boShowActive THEN
 		IN_smaxDirectoryName						:= sFileDir, 
 		IN_sFileName								:= sFileName, 
 		IN_sColumnSeparator							:= ',', 
-		IN_iMotorsNr								:= 1, 
+		IN_iMotorsNr								:= iMotorsNum, 
 		IN_boStartReading							:= boReadShow, 
 		IN_paa2lrTable								:= ADR(aa2lrTable), 
 		OUT_boError									=> boShowLoadError);
@@ -110,12 +112,13 @@ ELSE
 				Periodic							:= FALSE, 
 				MasterAbsolute						:= TRUE, 
 				SlaveAbsolute						:= TRUE, 
-				CamTableID							:= 1, 
+				CamTableID							:= INT_TO_UDINT(iTable+1), 
 				Done=> , 
 				Busy=> , 
 				Error=> , 
 				ErrorID=> );
 			IF MC_CamTableSelect.Done AND NOT MC_CamTableSelect.Error THEN
+				iTable								:= iTable + 1;
 				MC_CamTableSelect(	
 					Master							:= AxMaster, 
 					Slave							:= AxMotor[iTable], 
@@ -125,7 +128,7 @@ ELSE
 					iTable							:= 0;
 					iShowState						:= 30;
 				ELSE
-					iTable							:= iTable + 1;
+					//
 				END_IF
 			ELSIF MC_CamTableSelect.Error THEN
 				MC_CamTableSelect(	
@@ -186,7 +189,55 @@ ELSE
 				// Error
 			END_IF
 			
-		60:		
+		60:		// couple axes
+			fbTimeout.IN							:= TRUE;
+			fbTimeout.PT							:= T#5S;
+			boAxCamIn								:= TRUE;
+			boAxCamInDone							:= TRUE;
+			FOR i := 0 TO iMotorsNum - 1 DO
+				boAxCamInDone						:= boAxCamInDone AND fbCamIn[i].InSync AND NOT fbCamIn[i].Error;
+				IF fbCamIn[i].Error THEN
+					// Error
+				END_IF
+			END_FOR
+			IF boAxCamInDone THEN
+				fbTimeout.IN						:= FALSE;
+				iShowState							:= 70;
+			ELSIF fbTimeout.Q THEN
+				fbTimeout.IN						:= FALSE;
+				// Error
+			END_IF
+			
+		70:		// move master axis
+			boMasterMovAbs							:= TRUE;
+			IF fbMasterMoveAbs.Busy THEN
+				boMasterMovAbs						:= FALSE;
+				iShowState							:= 75;
+			END_IF
+			
+		75:		// check show end
+			IF fbMasterMoveAbs.Done THEN
+				iShowState							:= 80;
+			END_IF
+			
+		80:		// decouple axes
+			fbTimeout.IN							:= TRUE;
+			fbTimeout.PT							:= T#5S;
+			boAxCamOut								:= TRUE;
+			boAxCamOutDone							:= TRUE;
+			FOR i := 0 TO iMotorsNum - 1 DO
+				boAxCamOutDone						:= boAxCamOutDone AND fbCamOut[i].Done AND NOT fbCamOut[i].Error;
+				IF fbCamOut[i].Error THEN
+					// Error
+				END_IF
+			END_FOR
+			IF boAxCamOutDone THEN
+				fbTimeout.IN						:= FALSE;
+				iShowState							:= 40;
+			ELSIF fbTimeout.Q THEN
+				fbTimeout.IN						:= FALSE;
+				// Error
+			END_IF
 	END_CASE
 END_IF
 
@@ -261,7 +312,7 @@ FOR i := 0 TO iMotorsNum-1 DO
 	fbMoveAbs[i](
 		Axis										:= AxMotor[i], 
 		Execute										:= boMoveAbs, 
-		Position									:= aa2lrTable[0][0, i], 
+		Position									:= aa2lrTable[i][0, 1], 
 		Velocity									:= lrVelocity, 
 		Acceleration								:= lrAcceleration, 
 		Deceleration								:= lrDeceleration, 
@@ -315,7 +366,14 @@ END_FOR
 ]]></ST>
     </Implementation>
     <LineIds Name="MAIN">
-      <LineId Id="630" Count="88" />
+      <LineId Id="630" Count="54" />
+      <LineId Id="1006" Count="0" />
+      <LineId Id="1002" Count="0" />
+      <LineId Id="1004" Count="1" />
+      <LineId Id="1003" Count="0" />
+      <LineId Id="689" Count="3" />
+      <LineId Id="1007" Count="0" />
+      <LineId Id="694" Count="24" />
       <LineId Id="877" Count="0" />
       <LineId Id="719" Count="12" />
       <LineId Id="875" Count="1" />
@@ -332,6 +390,18 @@ END_FOR
       <LineId Id="878" Count="2" />
       <LineId Id="743" Count="0" />
       <LineId Id="883" Count="1" />
+      <LineId Id="965" Count="1" />
+      <LineId Id="944" Count="0" />
+      <LineId Id="952" Count="2" />
+      <LineId Id="962" Count="2" />
+      <LineId Id="955" Count="6" />
+      <LineId Id="943" Count="0" />
+      <LineId Id="967" Count="4" />
+      <LineId Id="973" Count="0" />
+      <LineId Id="972" Count="0" />
+      <LineId Id="975" Count="6" />
+      <LineId Id="983" Count="15" />
+      <LineId Id="982" Count="0" />
       <LineId Id="744" Count="124" />
       <LineId Id="246" Count="0" />
     </LineIds>
