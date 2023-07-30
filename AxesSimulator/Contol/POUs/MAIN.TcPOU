@@ -1,24 +1,29 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
-<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.4">
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.12">
   <POU Name="MAIN" Id="{66959d8b-103b-4309-9846-4d9c01568e87}" SpecialFunc="None">
     <Declaration><![CDATA[PROGRAM MAIN
 VAR
-	boReadShow						: BOOL;		// GUI
-	boShowActive					: BOOL;
 	fbTimeout						: TON;
+	
+	(* GUI Parameters *)
+	// User Control
+	boShowLoad						: BOOL;
+	boShowStart						: BOOL;
+	boShowPause						: BOOL;
+	boShowStop						: BOOL;
 	
 	(* Show Functions & Parameters *)
 	// 1. csv file loading
 	fbCsvRead						: FB_CsvRead_CamTable;
 	iFrames							: INT;
 	boShowLoadError					: BOOL;
+	boShowLoading					: BOOL;
 	boShowLoaded					: BOOL;
 	i								: INT;
 	iTable							: INT	:= 0;
 	
 	// 2. show manupulation
 	iShowState						: INT := 0;
-	boStartShow						: BOOL;		// GUI
 	
 	// camming table
 	TableCamRef						: ARRAY[0..iMotorsNum-1] OF MC_CAM_REF;
@@ -31,12 +36,16 @@ VAR
 	fbMasterEnable					: MC_Power;
 	fbMasterSetPosition				: MC_SetPosition;
 	fbMasterMoveAbs					: MC_MoveAbsolute;
+	fbMasterStop					: MC_Stop;
 	fbMasterReset					: MC_Reset;
 	
 	boMasterEnable					: BOOL;
 	boMasterSetPosition				: BOOL;
 	boMasterMovAbs					: BOOL;
 	rMasterTargetPosition			: REAL;
+	boMasterStop					: BOOL;
+	boShowPauseLatch				: BOOL;
+	boShowStopLatch					: BOOL;
 	boMasterReset					: BOOL;
 	
 	// 2. Slave Axes
@@ -59,41 +68,45 @@ VAR
 	boAxCamOutDone					: BOOL;
 	boReset							: BOOL;
 	
-	
+	boShowActived					: BOOL;
 END_VAR
 ]]></Declaration>
     <Implementation>
       <ST><![CDATA[// General
+boShowLoading										:= fbCsvRead.OUT_boBusy;
 boShowLoaded										:= aa2lrTable[iMotorsNum-1][iMaxPoints-1,0] <> 0 AND NOT fbCsvRead.OUT_boBusy;
-boShowActive										:= iShowState > 0;
+
 fbTimeout();
 
 // Logic Control
-IF NOT boShowActive THEN
+IF NOT boShowActived THEN
 	fbCsvRead(
-		IN_smaxDirectoryName						:= sFileDir, 
+		IN_smaxDirectoryName		 				:= sFileDir, 
 		IN_sFileName								:= sFileName, 
 		IN_sColumnSeparator							:= ',', 
 		IN_iMotorsNr								:= iMotorsNum, 
-		IN_boStartReading							:= boReadShow, 
+		IN_boStartReading							:= boShowLoad, 
 		IN_paa2lrTable								:= ADR(aa2lrTable), 
 		OUT_boError									=> boShowLoadError);
 	IF fbCsvRead.OUT_boDone AND NOT fbCsvRead.OUT_boError THEN
 		iFrames										:= fbCsvRead.OUT_iRowsnNumber;
-		boReadShow									:= FALSE;
+		boShowLoad									:= FALSE;
 	ELSIF fbCsvRead.OUT_boDone AND fbCsvRead.OUT_boError THEN
-		boReadShow									:= FALSE;
+		boShowLoad									:= FALSE;
+	END_IF
+	IF boShowLoaded AND boShowStart THEN
+		boShowActived								:= TRUE;
+		iShowState									:= 10;
 	END_IF
 ELSE
 	CASE iShowState OF
 		0:		// Idle
-			IF boStartShow AND boShowLoaded THEN
-				boStartShow							:= FALSE;
-				iShowState							:= 10;
-			END_IF
+			boShowActived							:= FALSE;
+			boShowPauseLatch						:= FALSE;
+			boShowStopLatch							:= FALSE;
 			
 		10:		// preparing camming referencing
-			rMasterTargetPosition					:= aa2lrTable[0][iMaxPoints-1,0];	// last time stamp in the table
+			rMasterTargetPosition					:= LREAL_TO_REAL(aa2lrTable[0][iMaxPoints-1,0]);	// last time stamp in the table
 			FOR i := 0 TO iMotorsNum - 1 DO
 				TableCamRef[i].pArray				:= ADR(aa2lrTable[i]);
 				TableCamRef[i].ArraySize			:= SIZEOF(aa2lrTable[i]);
@@ -202,6 +215,7 @@ ELSE
 			END_FOR
 			IF boAxCamInDone THEN
 				fbTimeout.IN						:= FALSE;
+				boAxCamIn							:= FALSE;
 				iShowState							:= 70;
 			ELSIF fbTimeout.Q THEN
 				fbTimeout.IN						:= FALSE;
@@ -219,6 +233,30 @@ ELSE
 			IF fbMasterMoveAbs.Done THEN
 				iShowState							:= 80;
 			END_IF
+			IF boShowPause THEN
+				boMasterStop						:= TRUE;
+				boShowPauseLatch					:= TRUE;
+				iShowState							:= 77;
+			ELSIF boShowStop THEN
+				boMasterStop						:= TRUE;
+				boShowStopLatch						:= TRUE;
+				iShowState							:= 77;
+			END_IF
+			
+		77:		// stop check
+			boMasterStop							:= FALSE;
+			IF fbMasterStop.Done THEN
+				iShowState							:= 78;
+			END_IF
+			
+		78:		// decision making
+			IF boShowPauseLatch AND boShowStart THEN
+				boShowPauseLatch					:= FALSE;
+				iShowState							:= 70;
+			END_IF
+			IF boShowStopLatch THEN
+				iShowState							:= 80;
+			END_IF
 			
 		80:		// decouple axes
 			fbTimeout.IN							:= TRUE;
@@ -233,7 +271,13 @@ ELSE
 			END_FOR
 			IF boAxCamOutDone THEN
 				fbTimeout.IN						:= FALSE;
-				iShowState							:= 40;
+				boAxCamOut							:= FAlse;
+				IF boShowStopLatch THEN
+					boShowStopLatch					:= FALSE;
+					iShowState						:= 0;
+				ELSE
+					iShowState						:= 40;
+				END_IF
 			ELSIF fbTimeout.Q THEN
 				fbTimeout.IN						:= FALSE;
 				// Error
@@ -277,6 +321,19 @@ fbMasterMoveAbs(
 	Deceleration									:= rShowDeceleration, 
 	Jerk:= , 
 	BufferMode:= , 
+	Options:= , 
+	Done=> , 
+	Busy=> , 
+	Active=> , 
+	CommandAborted=> , 
+	Error=> , 
+	ErrorID=> );
+
+fbMasterStop(
+	Axis											:= AxMaster, 
+	Execute											:= boMasterStop, 
+	Deceleration:= , 
+	Jerk:= , 
 	Options:= , 
 	Done=> , 
 	Busy=> , 
@@ -366,43 +423,48 @@ END_FOR
 ]]></ST>
     </Implementation>
     <LineIds Name="MAIN">
-      <LineId Id="630" Count="54" />
-      <LineId Id="1006" Count="0" />
-      <LineId Id="1002" Count="0" />
-      <LineId Id="1004" Count="1" />
-      <LineId Id="1003" Count="0" />
-      <LineId Id="689" Count="3" />
-      <LineId Id="1007" Count="0" />
-      <LineId Id="694" Count="24" />
-      <LineId Id="877" Count="0" />
-      <LineId Id="719" Count="12" />
-      <LineId Id="875" Count="1" />
-      <LineId Id="732" Count="1" />
-      <LineId Id="870" Count="0" />
-      <LineId Id="734" Count="1" />
-      <LineId Id="871" Count="0" />
-      <LineId Id="736" Count="1" />
-      <LineId Id="881" Count="0" />
-      <LineId Id="738" Count="1" />
-      <LineId Id="872" Count="0" />
-      <LineId Id="882" Count="0" />
-      <LineId Id="873" Count="1" />
-      <LineId Id="878" Count="2" />
-      <LineId Id="743" Count="0" />
-      <LineId Id="883" Count="1" />
-      <LineId Id="965" Count="1" />
-      <LineId Id="944" Count="0" />
-      <LineId Id="952" Count="2" />
-      <LineId Id="962" Count="2" />
-      <LineId Id="955" Count="6" />
-      <LineId Id="943" Count="0" />
-      <LineId Id="967" Count="4" />
-      <LineId Id="973" Count="0" />
-      <LineId Id="972" Count="0" />
-      <LineId Id="975" Count="6" />
-      <LineId Id="983" Count="15" />
-      <LineId Id="982" Count="0" />
-      <LineId Id="744" Count="124" />
+      <LineId Id="1869" Count="2" />
+      <LineId Id="2216" Count="0" />
+      <LineId Id="1873" Count="17" />
+      <LineId Id="2217" Count="1" />
+      <LineId Id="2220" Count="0" />
+      <LineId Id="2223" Count="0" />
+      <LineId Id="1891" Count="2" />
+      <LineId Id="2219" Count="0" />
+      <LineId Id="1897" Count="0" />
+      <LineId Id="2221" Count="0" />
+      <LineId Id="1898" Count="110" />
+      <LineId Id="2224" Count="0" />
+      <LineId Id="2009" Count="16" />
+      <LineId Id="2171" Count="1" />
+      <LineId Id="2193" Count="0" />
+      <LineId Id="2195" Count="0" />
+      <LineId Id="2174" Count="1" />
+      <LineId Id="2194" Count="0" />
+      <LineId Id="2196" Count="0" />
+      <LineId Id="2173" Count="0" />
+      <LineId Id="2026" Count="0" />
+      <LineId Id="2197" Count="0" />
+      <LineId Id="2222" Count="0" />
+      <LineId Id="2198" Count="0" />
+      <LineId Id="2207" Count="0" />
+      <LineId Id="2200" Count="1" />
+      <LineId Id="2226" Count="0" />
+      <LineId Id="2228" Count="5" />
+      <LineId Id="2227" Count="0" />
+      <LineId Id="2234" Count="0" />
+      <LineId Id="2027" Count="12" />
+      <LineId Id="2225" Count="0" />
+      <LineId Id="2208" Count="0" />
+      <LineId Id="2213" Count="0" />
+      <LineId Id="2209" Count="0" />
+      <LineId Id="2211" Count="1" />
+      <LineId Id="2210" Count="0" />
+      <LineId Id="2041" Count="49" />
+      <LineId Id="2177" Count="11" />
+      <LineId Id="2091" Count="0" />
+      <LineId Id="2189" Count="0" />
+      <LineId Id="2092" Count="77" />
       <LineId Id="246" Count="0" />
     </LineIds>
   </POU>

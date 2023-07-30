@@ -1,15 +1,15 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
-<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.4">
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.12">
   <GVL Name="GVL_UserParamerts" Id="{35a882cb-0929-4dd5-b165-241f8f953556}">
     <Declaration><![CDATA[//{attribute 'qualified_only'}
 VAR_GLOBAL CONSTANT
 	// kinetic parameters
-	lrVelocity						: REAL		:= 100;
-	lrAcceleration					: REAL		:= 100;
-	lrDeceleration					: REAL		:= 100;
+	lrVelocity						: REAL		:= 1000;
+	lrAcceleration					: REAL		:= 1000;
+	lrDeceleration					: REAL		:= 1000;
 	
 	// show parameters
-	rShowVelocity					: REAL		:= 1;
+	rShowVelocity					: REAL		:= 100;
 	rShowAcceleration				: REAL		:= 1000;
 	rShowDeceleration				: REAL		:= 1000;
 	
